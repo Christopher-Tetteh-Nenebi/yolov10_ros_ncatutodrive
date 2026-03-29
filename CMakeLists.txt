@@ -45,5 +45,8 @@ catkin_install_python(PROGRAMS
   src/speed_limit_ocr_node.py
   src/perception_viz_node.py
   src/lane_seg_node.py
+  src/perception_fusion_node.py
+  src/scoring_can.py
+  src/lidar_stamp_relay.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

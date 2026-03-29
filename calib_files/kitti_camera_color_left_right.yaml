@@ -1,0 +1,77 @@
+%YAML:1.0
+
+#--------------------------------------------------------------------------------------------
+# Camera Parameters. Adjust them!
+#--------------------------------------------------------------------------------------------
+File.version: "1.0"
+
+Camera.type: "PinHole"
+
+# Camera calibration and distortion parameters (OpenCV)- Edit this from our camera calibration
+Camera1.fx: 2398.364205
+Camera1.fy: 2516.002253
+Camera1.cx: 954.880342
+Camera1.cy: 681.016001
+
+# From repo examples
+#Camera1.fx: 718.856
+#Camera1.fy: 718.856
+#Camera1.cx: 607.1928
+#Camera1.cy: 185.2157
+
+# plumb_bob (from camera_calibration, nearly distortion-free)
+Camera1.k1: -0.002319
+Camera1.k2:  0.070328
+Camera1.k3:  0.0
+Camera1.p1:  0.002409
+Camera1.p2: -0.000539
+
+# From repo examples:
+#Camera1.k1: 0.0
+#Camera1.k2: 0.0
+#Camera1.p1: 0.0
+#Camera1.p2: 0.0
+
+# Camera resolution - Edit this from our camera datasheet
+Camera.width: 1920
+Camera.height: 1280
+
+# Camera frames per second
+Camera.fps: 10
+
+# Color order of the images (0: BGR, 1: RGB. It is ignored if images are grayscale)
+Camera.RGB: 1
+
+#--------------------------------------------------------------------------------------------
+# ORB Parameters
+#--------------------------------------------------------------------------------------------
+
+# ORB Extractor: Number of features per image
+ORBextractor.nFeatures: 3000
+
+# ORB Extractor: Scale factor between levels in the scale pyramid
+ORBextractor.scaleFactor: 1.2
+
+# ORB Extractor: Number of levels in the scale pyramid
+ORBextractor.nLevels: 8
+
+# ORB Extractor: Fast threshold
+# Image is divided in a grid. At each cell FAST are extracted imposing a minimum response.
+# Firstly we impose iniThFAST. If no corners are detected we impose a lower value minThFAST
+# Lowered for indoor/low-contrast scenes
+ORBextractor.iniThFAST: 10
+ORBextractor.minThFAST: 3
+
+#--------------------------------------------------------------------------------------------
+# Viewer Parameters
+#--------------------------------------------------------------------------------------------
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1.0
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2.0
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3.0
+Viewer.ViewpointX: 0.0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -3.5
+Viewer.ViewpointF: 500.0

@@ -1,0 +1,49 @@
+Reference extrinsics as translation vector (x,y,z) and quaternion (x,y,z,w): .
+Translation: (0, -0.15, -0.15)
+Rotation:    (0.5, -0.5, 0.5, 0.5)
+
+Reference extrinsics as pose matrix: 
+    0    -1     0     0
+    0     0    -1 -0.15
+    1     0     0 -0.15
+    0     0     0     1
+
+Duration of rosbag processing: 3.1714 seconds.
+
+Duration of initial optimization: 0.0187427 seconds.
+
+Initial extrinsics (after hand-eye calibration) as translation vector (x.y.z) and quaternion (x,y,z,w)
+Translation: (0, -0.1, -0.15)
+Rotation:    (0.5, -0.5, 0.5, 0.5)
+
+Initial transform as pose matrix: 
+    0    -1     0     0
+    0     0    -1  -0.1
+    1     0     0 -0.15
+    0     0     0     1
+
+Duration of rosbag processing: 9.4803 seconds.
+
+Duration of refinement optimization: 0.517318 seconds.
+
+Duration of overall processing: 14.5804 seconds.
+
+Refined extrinsics (after optimization with correspondences) as translation vector (x.y.z) and quaternion (x,y,z,w).
+Translation: (0.0493363, -0.109786, -0.127078)
+Rotation:    (0.504246, -0.499217, 0.498108, 0.498404)
+
+Refined transform as pose matrix: 
+ 0.00534166   -0.999975  0.00471492   0.0493363
+-0.00693728 -0.00475193   -0.999965   -0.109786
+   0.999962  0.00530876 -0.00696249   -0.127078
+          0           0           0           1
+
+The error (after optimization with correspondences) measured as translation vector (x,y,z) and euler angles (zyx)
+Translation: (0.0229222, -0.0493363, -0.0402139) meters
+Rotation:    (3.13625, -3.13466, -3.13684) radians
+
+The error (after optimization with correspondences) measured as translation magnitude (delta_t) and rotation magnitude (delta_r)
+Translation magnitude: (0.067651) meters
+Rotation magnitude:    (0.00995326) radians
+                       (0.57028) degrees
+

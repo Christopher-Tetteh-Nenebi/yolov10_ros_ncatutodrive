@@ -2,7 +2,7 @@
   <!-- KITTI bag image topic — kitti2bag default is /kitti/camera_color_left/image_raw
        for color sequences, or /kitti/camera_gray_left/image_raw for grayscale.
        Override at runtime: roslaunch yolov10_ros pipeline_kitti.launch bag_image_topic:=/your/topic -->
-  <arg name="bag_image_topic" default="/kitti/camera_color_left/image_raw" />
+  <arg name="bag_image_topic" default="/camera_2/usb_cam_2/usb_cam_2_node/image_raw" />
   <arg name="device" default="0" />
 
   <include file="$(find yolov10_ros)/launch/pipeline.launch">

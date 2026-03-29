@@ -3,7 +3,7 @@
   <arg name="confidence_threshold" default="0.5" />
   <arg name="device" default="0" />
   <arg name="inference_size" default="640" />
-  <arg name="input_image_topic" default="/camera/color/image_raw" />
+  <arg name="input_image_topic" default="/camera_2/usb_cam_2/usb_cam_2_node/image_raw" />
   <arg name="view_image" default="true" />
 
   <node pkg="yolov10_ros" name="yolov10_detector" type="detector_node.py" output="screen">

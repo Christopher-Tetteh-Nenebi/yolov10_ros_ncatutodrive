@@ -1,7 +1,7 @@
 <launch>
   <!-- Common args -->
   <arg name="device" default="0" />
-  <arg name="input_image_topic" default="/camera/color/image_raw" />
+  <arg name="input_image_topic" default="/camera_2/usb_cam_2/usb_cam_2_node/image_raw" />
 
   <!-- Detector -->
   <arg name="detector_weights" default="$(find yolov10_ros)/models/yolov10-bdd-vanilla.pt" />

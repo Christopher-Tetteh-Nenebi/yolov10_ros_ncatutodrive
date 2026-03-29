@@ -1,0 +1,142 @@
+<launch>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       YOLOv10 Perception Stack
+       ═══════════════════════════════════════════════════════════════════════
+       Launches five nodes:
+         1. yolov10_detector   — thin inference node (camera → detections)
+         2. perception_fusion  — LiDAR fusion + perception message routing
+         3. sign_classifier    — EfficientNet B0 traffic sign type classifier
+         4. lane_seg           — TwinLiteNet drivable area + lane line masks
+         5. perception_viz     — annotated image publisher → /perception/annotated
+
+       Mandatory args you MUST set for your environment:
+         weights       path to your .pt model file
+         calib_path    directory containing calib_cam_to_cam.txt and
+                       calib_trial_Jan28.txt
+         camera_topic  your camera ROS topic
+         lidar_topic   your LiDAR PointCloud2 topic
+  ════════════════════════════════════════════════════════════════════════ -->
+
+  <!-- ── Top-level arguments (override from command line or parent launch) ── -->
+  <arg name="weights"       default="$(find yolov10_ros)/models/yolov10-bdd-vanilla.pt"/>
+  <arg name="calib_path"    default="$(find yolov10_ros)/calib_files"/>
+  <arg name="camera_topic"  default="/camera_2/usb_cam_2/usb_cam_2_node/image_raw"/>
+  <arg name="lidar_topic"   default="/ouster/points"/>
+
+  <!-- Inference tuning -->
+  <arg name="confidence_threshold" default="0.5"/>
+  <arg name="inference_size"       default="640"/>
+  <arg name="device"               default="0"/>      <!-- "0" = cuda:0, "cpu" = CPU -->
+  <arg name="half"                 default="false"/>  <!-- FP16, GPU only -->
+
+  <!-- Debug / visualisation -->
+  <arg name="view_image"       default="false"/>
+  <arg name="publish_annotated" default="false"/>
+
+  <!-- Time synchronisation tolerance (seconds) -->
+  <arg name="slop" default="0.1"/>
+
+  <!-- ── Node 1: YOLOv10 detector ──────────────────────────────────────── -->
+  <node name="yolov10_detector"
+        pkg="yolov10_ros"
+        type="detector_node.py"
+        output="screen"
+        respawn="true"
+        respawn_delay="3">
+
+    <param name="weights"              value="$(arg weights)"/>
+    <param name="confidence_threshold" value="$(arg confidence_threshold)"/>
+    <param name="inference_size"       value="$(arg inference_size)"/>
+    <param name="device"               value="$(arg device)"/>
+    <param name="half"                 value="$(arg half)"/>
+
+    <param name="input_image_topic"    value="$(arg camera_topic)"/>
+    <param name="output_topic"         value="/yolov10/detections"/>
+    <param name="output_image_topic"   value="/yolov10/image_raw"/>
+    <param name="annotated_image_topic" value="/yolov10/annotated"/>
+
+    <param name="view_image"           value="$(arg view_image)"/>
+    <param name="publish_annotated"    value="$(arg publish_annotated)"/>
+
+  </node>
+
+  <!-- ── Node 2: Perception fusion ─────────────────────────────────────── -->
+  <node name="perception_fusion"
+        pkg="yolov10_ros"
+        type="perception_fusion_node.py"
+        output="screen"
+        respawn="true"
+        respawn_delay="3">
+
+    <param name="calib_path"              value="$(arg calib_path)"/>
+    <param name="input_detections_topic"  value="/yolov10/detections"/>
+    <param name="input_image_topic"       value="/yolov10/image_raw"/>
+    <param name="input_pcl_topic"         value="$(arg lidar_topic)"/>
+    <param name="slop"                    value="$(arg slop)"/>
+
+  </node>
+
+  <!-- ── Node 3: Traffic light classifier ─────────────────────────────── -->
+  <node name="light_classifier"
+        pkg="yolov10_ros"
+        type="light_classifier_node.py"
+        output="screen"
+        respawn="true"
+        respawn_delay="3">
+
+    <param name="weights"             value="$(find yolov10_ros)/models/efficientnet_b0_20260211_195116_light_cls.pth"/>
+    <param name="device"              value="$(arg device)"/>
+    <param name="detection_topic"     value="/yolov10/detections"/>
+    <param name="image_topic"         value="/yolov10/image_raw"/>
+    <param name="output_topic"        value="/perception/traffic_lights"/>
+
+  </node>
+
+  <!-- ── Node 4: Traffic sign classifier ──────────────────────────────── -->
+  <node name="sign_classifier"
+        pkg="yolov10_ros"
+        type="sign_classifier_node.py"
+        output="screen"
+        respawn="true"
+        respawn_delay="3">
+
+    <param name="weights"             value="$(find yolov10_ros)/models/efficientnet_b0_20260202_154542_sign_cls.pth"/>
+    <param name="device"              value="$(arg device)"/>
+    <param name="detection_topic"     value="/yolov10/detections"/>
+    <param name="image_topic"         value="/yolov10/image_raw"/>
+    <param name="output_topic"        value="/perception/traffic_signs"/>
+
+  </node>
+
+  <!-- ── Node 4: Lane segmentation ────────────────────────────────────── -->
+  <node name="lane_seg"
+        pkg="yolov10_ros"
+        type="lane_seg_node.py"
+        output="screen"
+        respawn="true"
+        respawn_delay="3">
+
+    <param name="weights"             value="$(find yolov10_ros)/models/twinlitenet_best.pth"/>
+    <param name="device"              value="$(arg device)"/>
+    <param name="image_topic"         value="/yolov10/image_raw"/>
+    <param name="drivable_area_topic" value="/perception/drivable_area"/>
+    <param name="lane_lines_topic"    value="/perception/lane_lines"/>
+
+  </node>
+
+  <!-- ── Node 5: Perception visualizer ─────────────────────────────────── -->
+  <node name="perception_viz"
+        pkg="yolov10_ros"
+        type="perception_viz_node.py"
+        output="screen"
+        respawn="true"
+        respawn_delay="3">
+
+    <param name="detection_topic" value="/yolov10/detections"/>
+    <param name="image_topic"     value="/yolov10/image_raw"/>
+    <param name="output_topic"    value="/perception/annotated"/>
+
+  </node>
+
+</launch>
