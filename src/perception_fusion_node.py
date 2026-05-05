@@ -197,11 +197,24 @@ class PerceptionFusionNode:
         # sign_classifier and light_classifier publish at camera frame rate on
         # their own topics.  We cache the latest array and match detections by
         # bounding-box centre proximity inside the message builders.
-        from yolov10_ros.msg import ClassifiedSignArray, ClassifiedLightArray
+        from yolov10_ros.msg import ClassifiedSignArray, ClassifiedLightArray, SpeedLimitArray
         self._latest_signs  = []   # list[ClassifiedSign]
         self._latest_lights = []   # list[ClassifiedLight]
+        self._latest_speeds = []   # list[SpeedLimit]
+        # Wall-clock stamps for TTL-based persistence in the overlay.  When a
+        # classifier skips a frame (e.g. softmax below threshold) we keep the
+        # last result for OVERLAY_PERSIST_SEC so the box doesn't flicker back
+        # to the default color for a single missed frame.
+        self._signs_stamp  = rospy.Time(0)
+        self._lights_stamp = rospy.Time(0)
+        self._speeds_stamp = rospy.Time(0)
+        self._da_mask = None       # drivable-area mask (mono8 numpy array)
+        self._ll_mask = None       # lane-lines  mask (mono8 numpy array)
         rospy.Subscriber("/perception/traffic_signs",  ClassifiedSignArray,  self._cb_signs,  queue_size=1)
         rospy.Subscriber("/perception/traffic_lights", ClassifiedLightArray, self._cb_lights, queue_size=1)
+        rospy.Subscriber("/perception/speed_limit",    SpeedLimitArray,      self._cb_speeds, queue_size=1)
+        rospy.Subscriber("/perception/drivable_area",  Image,                self._cb_da,     queue_size=1)
+        rospy.Subscriber("/perception/lane_lines",     Image,                self._cb_ll,     queue_size=1)
 
         # ── Publishers ────────────────────────────────────────────────────────
         self.pub_objects     = rospy.Publisher("/objects_scoring",             Objects,           queue_size=10)
@@ -275,8 +288,27 @@ class PerceptionFusionNode:
         return uvz[:, in_frame]   # (3, M): u, v, z
 
     def _draw_overlay(self, image, velo_uvz, detections):
-        """Draw LiDAR dots + bounding boxes with depth labels onto image."""
+        """Draw LiDAR dots + bounding boxes with depth labels onto image.
+
+        Boxes are colored by classifier output when available:
+          - traffic light  → red / yellow / green by predicted state
+          - traffic sign   → sky-blue with sign_type label,
+                             red with "SPEED N mph" if OCR value is available
+          - other classes  → green with class name
+        """
         overlay = image.copy()
+
+        # Drivable-area mask (semi-transparent blue) — drawn behind lidar dots.
+        if self._da_mask is not None and self._da_mask.shape == overlay.shape[:2]:
+            tint = overlay.copy()
+            tint[self._da_mask > 127] = (255, 0, 0)
+            overlay = cv2.addWeighted(overlay, 0.65, tint, 0.35, 0)
+
+        # Lane-lines mask (semi-transparent green) — also behind lidar dots.
+        if self._ll_mask is not None and self._ll_mask.shape == overlay.shape[:2]:
+            tint = overlay.copy()
+            tint[self._ll_mask > 127] = (0, 255, 0)
+            overlay = cv2.addWeighted(overlay, 0.70, tint, 0.30, 0)
 
         if velo_uvz is not None and velo_uvz.shape[1] > 0:
             draw_velo_on_image(velo_uvz, overlay)
@@ -284,32 +316,98 @@ class PerceptionFusionNode:
         font        = cv2.FONT_HERSHEY_SIMPLEX
         font_scale  = 0.5
         thickness   = 1
-        color_det   = (0, 255,   0)   # green — class + confidence
-        color_depth = (0,   0, 255)   # red   — depth value
+        color_default = (  0, 255,   0)   # green — vehicles / persons / etc.
+        color_depth   = (  0,   0, 255)   # red   — depth value (always)
+        color_sign    = (255, 180,   0)   # sky-blue
+        color_speed   = (  0,   0, 255)   # red — speed limit OCR
+        light_colors = {
+            'green_light':  ( 30, 200,  30),
+            'green_left':   ( 30, 200,  30),
+            'red_light':    (  0,   0, 220),
+            'red_left':     (  0,   0, 220),
+            'yellow_light': (  0, 200, 220),
+            'yellow_left':  (  0, 200, 220),
+        }
+
+        # TTL-gate the classifier caches.  If the classifier hasn't published a
+        # fresh frame within OVERLAY_PERSIST_SEC, treat the cache as empty so a
+        # genuinely-gone object stops being colored as red/green/yellow forever.
+        OVERLAY_PERSIST_SEC = 0.9
+        now = rospy.Time.now()
+        ttl = rospy.Duration.from_sec(OVERLAY_PERSIST_SEC)
+        light_list = self._latest_lights if (now - self._lights_stamp) < ttl else []
+        sign_list  = self._latest_signs  if (now - self._signs_stamp)  < ttl else []
+        speed_list = self._latest_speeds if (now - self._speeds_stamp) < ttl else []
+
+        def _nearest(items, det):
+            """Return the cached item whose box centre is closest to det's,
+            within MATCH_RADIUS pixels.  Tolerates ~30 px of frame-to-frame
+            bbox jitter so a single classifier miss doesn't cause flicker."""
+            MATCH_RADIUS = 30.0
+            if not items:
+                return None
+            det_cx = (det.xmin + det.xmax) / 2.0
+            det_cy = (det.ymin + det.ymax) / 2.0
+            best, best_d2 = None, MATCH_RADIUS * MATCH_RADIUS
+            for it in items:
+                cx = (it.xmin + it.xmax) / 2.0
+                cy = (it.ymin + it.ymax) / 2.0
+                d2 = (cx - det_cx) ** 2 + (cy - det_cy) ** 2
+                if d2 < best_d2:
+                    best_d2 = d2
+                    best = it
+            return best
 
         u_arr = velo_uvz[0] if velo_uvz is not None else None
         v_arr = velo_uvz[1] if velo_uvz is not None else None
         z_arr = velo_uvz[2] if velo_uvz is not None else None
 
         for d in detections:
-            depth     = self._estimate_depth(u_arr, v_arr, z_arr, d) \
-                        if u_arr is not None else None
-            det_label = '{} {:.2f}'.format(d.class_name, d.confidence)
+            depth = self._estimate_depth(u_arr, v_arr, z_arr, d) \
+                    if u_arr is not None else None
+
+            box_color = color_default
+            label = '{} {:.2f}'.format(d.class_name, d.confidence)
+            box_thickness = 2
+
+            if d.class_name == 'traffic light':
+                lt = _nearest(light_list, d)
+                if lt is not None:
+                    box_color = light_colors.get(lt.state, color_default)
+                    label = '{} | {} {:.2f}'.format(
+                        d.class_name, lt.state, lt.state_confidence)
+                    box_thickness = 3
+            elif d.class_name == 'traffic sign':
+                sg = _nearest(sign_list, d)
+                if sg is not None:
+                    if sg.sign_type == 'speed_limit':
+                        sl = _nearest(speed_list, d)
+                        speed_txt = 'SPEED {} mph'.format(sl.speed) if sl is not None \
+                                    else 'SPEED ? mph'
+                        label = '{} | {}'.format(d.class_name, speed_txt)
+                        box_color = color_speed
+                        box_thickness = 4
+                    else:
+                        label = '{} | {} {:.2f}'.format(
+                            d.class_name, sg.sign_type, sg.type_confidence)
+                        box_color = color_sign
+                        box_thickness = 3
+
+            cv2.rectangle(overlay, (d.xmin, d.ymin), (d.xmax, d.ymax),
+                          box_color, box_thickness)
+
             txt_x, txt_y = d.xmin, max(d.ymin - 5, 10)
-
-            cv2.rectangle(overlay, (d.xmin, d.ymin), (d.xmax, d.ymax), color_det, 2)
-
             if depth is not None and depth > 0:
-                cv2.putText(overlay, det_label + ' |', (txt_x, txt_y),
-                            font, font_scale, color_det, thickness, cv2.LINE_AA)
+                cv2.putText(overlay, label + ' |', (txt_x, txt_y),
+                            font, font_scale, box_color, thickness, cv2.LINE_AA)
                 (w_det, _), _ = cv2.getTextSize(
-                    det_label + ' |', font, font_scale, thickness)
+                    label + ' |', font, font_scale, thickness)
                 cv2.putText(overlay, ' {:.2f}m'.format(depth),
                             (txt_x + w_det, txt_y),
                             font, font_scale, color_depth, thickness, cv2.LINE_AA)
             else:
-                cv2.putText(overlay, det_label, (txt_x, txt_y),
-                            font, font_scale, color_det, thickness, cv2.LINE_AA)
+                cv2.putText(overlay, label, (txt_x, txt_y),
+                            font, font_scale, box_color, thickness, cv2.LINE_AA)
 
         return overlay
 
@@ -626,9 +724,21 @@ class PerceptionFusionNode:
 
     def _cb_signs(self, msg):
         self._latest_signs = list(msg.signs)
+        self._signs_stamp  = rospy.Time.now()
 
     def _cb_lights(self, msg):
         self._latest_lights = list(msg.lights)
+        self._lights_stamp  = rospy.Time.now()
+
+    def _cb_speeds(self, msg):
+        self._latest_speeds = list(msg.speed_limits)
+        self._speeds_stamp  = rospy.Time.now()
+
+    def _cb_da(self, msg):
+        self._da_mask = imgmsg_to_cv2(msg, encoding='mono8')
+
+    def _cb_ll(self, msg):
+        self._ll_mask = imgmsg_to_cv2(msg, encoding='mono8')
 
     def _match_classified(self, row, classified_list, max_dist: float = 80.0):
         """Return the classified item whose box centre is closest to row's box centre.
