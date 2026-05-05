@@ -174,19 +174,26 @@ def transform_uvz(uvz, T):
 # plotting functions (place these in KITTI plot utils
 from matplotlib import cm
 
-# get color map function
-rainbow_r = cm.get_cmap('rainbow_r', lut=100)
-get_color = lambda z : [255*val for val in rainbow_r(int(z.round()))[:3]]
+# get color map function — maps depth (metres) to a rainbow colour.
+# Depth is normalised to [0, MAX_DEPTH_M] before indexing into the 100-slot LUT
+# so objects beyond MAX_DEPTH_M all receive the same far colour instead of
+# causing an out-of-range lookup (which silently dropped points before).
+rainbow_r   = cm.get_cmap('rainbow_r', lut=100)
+MAX_DEPTH_M = 50.0   # metres — tune to your typical operating range
+
+def get_color(z):
+    idx = int(np.clip(z / MAX_DEPTH_M * 99, 0, 99).round())
+    return [255 * val for val in rainbow_r(idx)[:3]]
 
 def draw_velo_on_image(velo_uvz, image, color_map=get_color):
-   
+
     # unpack LiDAR points
     u, v, z = velo_uvz
 
-    # draw LiDAR point cloud on blank image
+    # radius=2 makes dots visible on high-resolution images (e.g. 1920×1280).
     for i in range(len(u)):
-        cv2.circle(image, (int(u[i]), int(v[i])), 1, 
-                   color_map(z[i]), -1);
+        cv2.circle(image, (int(u[i]), int(v[i])), 2,
+                   color_map(z[i]), -1)
 
     return image
 

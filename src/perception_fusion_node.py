@@ -338,70 +338,98 @@ class PerceptionFusionNode:
     def _estimate_depth(self, u_arr, v_arr, z_arr, d) -> float:
         """Robust LiDAR depth estimate for a single bounding box.
 
-        Strategy (applied in order):
-          1. Inner box (central 60%) — avoids edge contamination from
-             neighbouring objects or background leaking into the box edges.
-          2. Depth histogram mode — finds the dominant depth cluster inside
-             the box, ignoring stray noise points and ground hits.
-          3. 10th-percentile fallback — if the histogram yields no clear
-             winner, use the low percentile of the full-box points as a
-             robust foreground estimate.
-          4. Minimum point threshold — return None if fewer than 3 points
-             survive, rather than reporting a meaningless single-point value.
+        Three search regions are tried in order, each with its own minimum
+        point threshold.  Stricter thresholds are applied to outer regions
+        because points outside the box are less likely to belong to the object.
+
+        Regions and thresholds
+        ----------------------
+        inner box (central 60%)  : MIN_INNER  = 2 points
+        full bounding box        : MIN_FULL   = 3 points
+        expanded box (+50% each side): MIN_EXPANDED = 5 points AND std < 2 m
+
+        If no region meets its threshold, returns None so the caller knows
+        depth is unavailable rather than reporting a bad value.
+
+        Depth selection
+        ---------------
+        Points beyond MAX_OBJECT_DEPTH (80 m) are discarded as background.
+        The nearest 0.5 m bin with enough hits is returned (median of that
+        bin), so road-surface / wall contamination at larger depth loses.
         """
+        MAX_OBJECT_DEPTH  = 80.0   # metres — discard background beyond this
+        MIN_INNER         = 2      # minimum points required in inner box
+        MIN_FULL          = 3      # minimum points required in full box
+        MIN_EXPANDED      = 5      # minimum points required in expanded box
+        EXPANDED_MAX_STD  = 2.0    # expanded points must agree within this std (m)
+
         w = d.xmax - d.xmin
         h = d.ymax - d.ymin
 
-        # ── Step 1: inner-box mask (central 60%) ─────────────────────────────
+        # ── Region 1: inner box (central 60%) ────────────────────────────────
         shrink = 0.20
         ix1, ix2 = d.xmin + shrink * w, d.xmax - shrink * w
         iy1, iy2 = d.ymin + shrink * h, d.ymax - shrink * h
-        inner = (u_arr >= ix1) & (u_arr <= ix2) & (v_arr >= iy1) & (v_arr <= iy2)
-        z_inner = z_arr[inner]
+        inner_mask = (u_arr >= ix1) & (u_arr <= ix2) & (v_arr >= iy1) & (v_arr <= iy2)
+        z_inner = z_arr[inner_mask]
+        z_inner = z_inner[z_inner <= MAX_OBJECT_DEPTH]
 
-        # Fall back to full box if inner region is too sparse.
-        if len(z_inner) < 2:
-            full = (
-                (u_arr >= d.xmin) & (u_arr <= d.xmax) &
-                (v_arr >= d.ymin) & (v_arr <= d.ymax)
-            )
-            z_inner = z_arr[full]
+        if len(z_inner) >= MIN_INNER:
+            return self._cluster_depth(z_inner)
 
-        # Expand search box by 50% on each side to bridge LiDAR ring gaps.
-        # This handles objects that fall between scan lines (sparse vertical coverage).
-        if len(z_inner) < 2:
-            expand = 0.5
-            ex1 = d.xmin - expand * w
-            ex2 = d.xmax + expand * w
-            ey1 = d.ymin - expand * h
-            ey2 = d.ymax + expand * h
-            expanded = (u_arr >= ex1) & (u_arr <= ex2) & (v_arr >= ey1) & (v_arr <= ey2)
-            z_inner = z_arr[expanded]
+        # ── Region 2: full bounding box ───────────────────────────────────────
+        full_mask = (
+            (u_arr >= d.xmin) & (u_arr <= d.xmax) &
+            (v_arr >= d.ymin) & (v_arr <= d.ymax)
+        )
+        z_full = z_arr[full_mask]
+        z_full = z_full[z_full <= MAX_OBJECT_DEPTH]
 
-        # Even a single point is better than no depth at all.
-        if len(z_inner) == 0:
-            return None
-        if len(z_inner) == 1:
-            return float(z_inner[0])
+        if len(z_full) >= MIN_FULL:
+            return self._cluster_depth(z_full)
 
-        # ── Step 2: depth histogram — find dominant cluster ───────────────────
-        # Use 0.5 m bins. The bin with the most hits is the object surface;
-        # stray ground or background points form smaller secondary bins.
+        # ── Region 3: expanded box (+50%) ────────────────────────────────────
+        expand = 0.5
+        ex1 = d.xmin - expand * w
+        ex2 = d.xmax + expand * w
+        ey1 = d.ymin - expand * h
+        ey2 = d.ymax + expand * h
+        exp_mask = (u_arr >= ex1) & (u_arr <= ex2) & (v_arr >= ey1) & (v_arr <= ey2)
+        z_exp = z_arr[exp_mask]
+        z_exp = z_exp[z_exp <= MAX_OBJECT_DEPTH]
+
+        if len(z_exp) >= MIN_EXPANDED and float(np.std(z_exp)) <= EXPANDED_MAX_STD:
+            return self._cluster_depth(z_exp)
+
+        # Not enough reliable points in any region.
+        return None
+
+    def _cluster_depth(self, z_points: np.ndarray) -> float:
+        """Return the depth of the nearest dense cluster in z_points.
+
+        Walks 0.5 m histogram bins from nearest to farthest and returns
+        the median of the first bin that contains at least 2 points.
+        Falls back to the 10th percentile when all points fall in one bin
+        (very close object or extremely sparse scan).
+        """
+        if len(z_points) == 1:
+            return float(z_points[0])
+
         bin_size = 0.5
-        z_min, z_max = float(np.min(z_inner)), float(np.max(z_inner))
+        z_min = float(np.min(z_points))
+        z_max = float(np.max(z_points))
+
         if z_max - z_min > bin_size:
             bins = np.arange(z_min, z_max + bin_size, bin_size)
-            counts, edges = np.histogram(z_inner, bins=bins)
-            dominant_bin = int(np.argmax(counts))
-            lo, hi = edges[dominant_bin], edges[dominant_bin + 1]
-            z_cluster = z_inner[(z_inner >= lo) & (z_inner < hi)]
-            if len(z_cluster) >= 1:
-                return float(np.median(z_cluster))
+            counts, edges = np.histogram(z_points, bins=bins)
+            for i in range(len(counts)):
+                if counts[i] >= 2:
+                    lo, hi = edges[i], edges[i + 1]
+                    cluster = z_points[(z_points >= lo) & (z_points < hi)]
+                    return float(np.median(cluster))
 
-        # ── Step 3: 10th-percentile fallback ─────────────────────────────────
-        # Robust foreground estimate when all points fall in one bin (close
-        # object, or very sparse scan).
-        return float(np.percentile(z_inner, 10))
+        # All points in one bin — use a low percentile as foreground proxy.
+        return float(np.percentile(z_points, 10))
 
     def _load_calibration(self, calib_path: str):
         """
